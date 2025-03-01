@@ -1,0 +1,11 @@
+version: '3'
+
+services:
+  wiktionary-bot:
+    build: .
+    restart: always
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - TZ=UTC

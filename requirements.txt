@@ -1,0 +1,5 @@
+requests==2.31.0
+atproto==0.0.42
+python-dotenv==1.0.0
+schedule==1.2.1
+mwparserfromhell==0.6.6
