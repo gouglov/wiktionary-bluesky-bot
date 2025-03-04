@@ -9,6 +9,8 @@ import time
 from dotenv import load_dotenv
 import mwparserfromhell
 from atproto import client_utils
+from bs4 import BeautifulSoup
+from datetime import datetime
 
 # Load environment variables from .env file
 load_dotenv()
@@ -73,122 +75,14 @@ class WiktionaryBlueskyBot:
         except Exception as e:
             logger.error(f"Failed to connect to Bluesky: {e}")
             return False
-
-    def get_random_word(self):
-        """Get a random word from Wiktionary that hasn't been posted before"""
-        found=False
-        while not(found):#Iteration while nothing is posted
-            try:
-                # Query for a random word
-                params = {
-                    "action": "query",
-                    "list": "random",
-                    "rnnamespace": 0,  # Main namespace
-                    "rnlimit": 1,
-                    "format": "json"
-                }                
-                
-
-                response = requests.get(self.api_url, params=params)
-                data = response.json()  
-                               
-
-                if "query" in data and "random" in data["query"]:
-                    word = data["query"]["random"][0]["title"]
-                    # Check if we've already posted this word
-                    if word in self.posted_words:
-                        logger.info(f"Word '{word}' already posted, trying another")
-                        continue
-                    
-                    # Get the definition
-                    if (self.filter_data(word)) :
-                        definition = self.get_word_definition(word)
-                        if definition:
-                            found=True
-                            return {
-                                "word": word,
-                                "definition": definition,
-                                "url": f"https://{self.language}.wiktionary.org/wiki/{word.replace(' ', '_')}"
-                            }
-            except Exception as e:
-                logger.error(f"Error fetching random word: {e}")
-                time.sleep(2)  # Wait before retrying
-                
-        logger.error("Failed to get a suitable random word after multiple attempts")
-        return None
-
-    def filter_data(self, word):
-        try:
-            params = {
-                "action": "query",
-                "prop": "extracts",
-                "explaintext" : True,
-                "exsectionformat": "wiki",
-                "titles": word,
-                "format": "json"
-            }
-            
-            response = requests.get(self.api_url, params=params)
-            data = response.json()
-
-            page_id = next(iter(data["query"]["pages"]))
-            if page_id != "-1" and "extract" in data["query"]["pages"][page_id]:
-                extract = data["query"]["pages"][page_id]["extract"]
-                
-                extract = extract.strip()
-                #Use Parser From Hell to filtering data from API
-                wikicode = mwparserfromhell.parse(extract)
-                headings = wikicode.filter_headings()
-                
-                if("Français" in headings[0] and len(headings) >= 3) :
-                    cur_type=headings[2][4:-4]
-                    logger.info("C'est un mot français de type "+cur_type) 
-                    if(cur_type in self.valid_type) :
-                        return True
-            
-            return False
-        except Exception as e:
-            logger.error(f"Error fetching definition for word '{word}': {e}")
-            return False
-    def cleaningDef(self, definition) :
-        """Cleaning extra content in the definition"""
-        try:
-            # cleaning session 
-            for p in self.parasites :
-                if p in definition :
-                    logger.info("on supprime "+p)
-                    definition = definition.replace(p,'')
-
-            if len(definition) > 180:
-                    definition = definition[:177] + "..."
-            
-            countEqual = 0
-            indexSection = 0
-            for letter in definition :
-                if letter == "=":
-                    countEqual+=1
-                indexSection+=1
-                if countEqual == 7:
-                    logger.info("On supprime ce qui suit : \n"+definition[indexSection:]) 
-                    break
-
-            definition = definition[0:indexSection]
-
-            return definition
-            
-        except Exception as e:
-            logger.error(f"Error cleaning definition '{definition}': {e}")
-            return None 
-
-
-    def get_word_definition(self, word):
+    
+    def get_word_data(self, word):
         """Get the definition of a specific word"""
         try:
             params = {
                 "action": "query",
                 "prop": "extracts",
-                "explaintext" : True,
-                "exsectionformat": "wiki",
+                "exsectionformat": "plain",
                 "titles": word,
                 "format": "json"
             }
@@ -199,20 +93,102 @@ class WiktionaryBlueskyBot:
             page_id = next(iter(data["query"]["pages"]))
             if page_id != "-1" and "extract" in data["query"]["pages"][page_id]:
                 extract = data["query"]["pages"][page_id]["extract"]
-
-                wikicode = mwparserfromhell.parse(extract)                
-                sections=wikicode.get_sections(include_headings=True)
                 
-                # Truncate the extract then clean it
-                definition=sections[3].strip()
-                definition = self.cleaningDef(definition)
-                
-                return definition
+                word_data = {}
 
-            return None
+                soup = BeautifulSoup(extract, features="lxml")
+                
+                title = soup.find('p').find('span').text
+                word_data["word"] = title
+                word_data["url"] = f"https://{self.language}.wiktionary.org/wiki/{title.replace(' ', '_')}"     
+                logger.info(f"{title}")
+
+                first_line = soup.find('p').text.strip()
+                word_data["first_line"] = first_line 
+                logger.info(f"{first_line}")
+                
+                definition_list = soup.find('ol')
+                definitions = definition_list.find_all('li')
+                def_num = 1
+                length=len(first_line)
+                overflow = False
+                word_data["def_lines"]=[]
+                for definition in definitions :
+                    if definition.parent.name == "ol" :
+                        def_line = f"{def_num} - {definition.find(string=True, recursive=False).strip()}"
+                        # Case when the definition is too long for bluesky
+                        length += len(def_line)
+                        if length >= 229 :
+                            overflow = True
+                            def_line = def_line[:-3]
+                            def_line += "[…]"
+                        word_data["def_lines"].append(def_line)
+                        logger.info(f"{def_line}")
+                        def_num += 1
+                        if overflow :
+                            break
+                        
+                            
+                logger.info(f"{word_data}")
+
+            return word_data
+
         except Exception as e:
             logger.error(f"Error fetching definition for word '{word}': {e}")
             return None   
+
+    def get_today_word(self):
+            
+        current_day = datetime.now().day
+        current_month = datetime.now().month
+        current_year = datetime.now().year
+
+        page_name = f"Modèle:Entrée du jour/{current_year}/{current_month:02d}/{current_day:02d}"
+        logger.info(f"{page_name}")
+        try:
+            params = {
+                "action": "query",
+                "prop": "extracts",
+                "exsectionformat": "plain",
+                "titles": page_name,
+                "format": "json"
+            }
+
+            response = requests.get(self.api_url, params=params)
+            data = response.json()
+            
+
+            page_id = next(iter(data["query"]["pages"]))
+
+            if page_id == "-1" or "extract" in data["query"]["pages"][page_id]:
+                # fallback
+                logger.info(f"Fail to found a page, look at 2021")
+                page_name = f"Modèle:Entrée du jour/2021/{current_month:02d}/{current_day:02d}"
+                params = {
+                    "action": "query",
+                    "prop": "extracts",
+                    "exsectionformat": "plain",
+                    "titles": page_name,
+                    "format": "json"
+                }
+
+                response = requests.get(self.api_url, params=params)
+                data = response.json()
+
+                page_id = next(iter(data["query"]["pages"]))
+                
+            if page_id != "-1" and "extract" in data["query"]["pages"][page_id]:
+                extract = data["query"]["pages"][page_id]["extract"]
+
+                logger.info(f"Page of the day is <{page_name}>")
+                return page_name
+
+        except Exception as e:
+            logger.error(f"Error fetching random word: {e}")
+            time.sleep(2)  # Wait before retrying
+                
+        logger.error("Failed to get a suitable random word after multiple attempts")
+        return None
 
     def post_to_bluesky(self, word_data):
         """Post the word of the day to Bluesky"""
@@ -223,10 +199,12 @@ class WiktionaryBlueskyBot:
         try:
             #Use text builder to can add clickable links
             text_builder = client_utils.TextBuilder()
-            text_builder.text(f"📚 Wiktionnaire - Le mot du jour est \n{word_data['word'].capitalize()}\n")
-            text_builder.text(f"{word_data['definition']}\n\n")
-            text_builder.text(f"Plus d'info: ")
-            text_builder.link(f"{word_data['word']}", f"{word_data['url']}")     
+            text_builder.text(f"📚 Wiktionnaire - Le mot du jour est : \n\n{word_data['first_line'].capitalize()}\n")
+            for d in word_data['def_lines'] :
+                text_builder.text(f"{d}\n")
+            text_builder.text(f"\nPlus d'info sur ")
+            text_builder.link(f"l'article lié", f"{word_data['url']}")
+            text_builder.text(f".")
 
             self.client.send_post(text_builder)
             logger.info(f"\nPosted word of the day: {word_data['word']}")
@@ -250,7 +228,7 @@ class WiktionaryBlueskyBot:
                 return False
             
             # Get random word and definition
-            word_data = self.get_random_word()
+            word_data = self.get_word_data(self.get_today_word())
             if not word_data:
                 logger.error("Failed to get word data")
                 return False
