@@ -115,7 +115,8 @@ class WiktionaryBlueskyBot:
                 word_data["def_lines"]=[]
                 for definition in definitions :
                     if definition.parent.name == "ol" :
-                        def_line = f"{def_num} - {definition.find(string=True, recursive=False).strip()}"
+                        def_text_tab = definition.text.strip().split('\n')
+                        def_line = f"{def_num} - {def_text_tab[0]}"
                         # Case when the definition is too long for bluesky
                         length += len(def_line)
                         if length >= 229 :
