@@ -28,10 +28,6 @@ logger = logging.getLogger(__name__)
 class WiktionaryBlueskyBot:
     def __init__(self):
 
-        # List of data used for filtering and cleaning result
-        self.valid_type=["Nom commun","Adverbe", "Verbe", "Adjectif", "Locution nominale", "Locution verbale"]
-        self.parasites=["(pluriel à préciser)", "\\Prononciation ?\\"]
-
         # Bluesky credentials
         self.bluesky_handle = os.getenv("BLUESKY_HANDLE")
         self.bluesky_password = os.getenv("BLUESKY_PASSWORD")
